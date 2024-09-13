@@ -1,0 +1,489 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>PoseNet Alarm Clock</title>
+  <script src="https://unpkg.com/ml5@latest/dist/ml5.min.js" type="text/javascript"></script>
+  <style>
+    #big-container{
+        display: flex;
+        flex-direction: column;
+        justify-content: center;     
+        align-items: center;
+    }
+
+   #set-alarm {
+      margin-top: 20px;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      gap: 10px;
+    }
+    
+    body {
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  height: 100vh;
+  background-color: #f0f0f0;
+  font-family: Arial, sans-serif;
+}
+
+#interactionOverlay {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 10;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+#startButton {
+  padding: 15px 30px;
+  font-size: 20px;
+  color: white;
+  background-color: #007BFF;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+  transition: background-color 0.3s ease;
+}
+
+#startButton:hover {
+  background-color: #0056b3;
+}
+
+canvas, video {
+  display: block;
+  margin-top: 20px;
+}
+
+#set-alarm label, #set-alarm select, #set-alarm input, #set-alarm button {
+  font-size: 18px;
+  padding: 10px;
+  border-radius: 5px;
+  border: 1px solid #ccc;
+}
+
+#set-alarm button {
+  background-color: #242B70;
+  color: white;
+  cursor: pointer;
+  transition: background-color 0.3s ease;
+}
+
+#set-alarm button:hover {
+  background-color: #218838;
+}
+
+#set-alarm input, #set-alarm select {
+  border: 1px solid #ccc;
+}
+
+#set-alarm label {
+  margin-right: 5px;
+}
+
+h1 {
+  font-size: 36px;
+  margin-bottom: 20px;
+  color: #333;
+}
+
+#canvas {
+  border: 2px solid #ccc;
+  border-radius: 10px;
+}
+
+#alarm-message {
+      margin-top: 15px;
+      font-size: 24px;
+      font-weight: 700;
+      margin-bottom: 50px;
+      color: #333;
+    }
+
+  </style>
+</head>
+<body>
+  <h1>포즈넷 알람 시계</h1>
+  <canvas id="canvas" width="640" height="480"></canvas> 
+  <video id="video" width="640" height="480" autoplay style="display: none"></video>
+  <audio id="audio" preload="auto" src="Good_Morning.mp3"></audio>
+  <div id="interactionOverlay">
+    <button id="startButton">Click to Start</button>
+  </div>
+
+  <div id="big-container">
+  <div id="set-alarm">
+    <label for="alarm-time">알람 시간을 설정하세요:</label>
+    <input type="time" id="alarm-time">
+    <label for="stretch-option">스트레칭을 고르세요:</label>
+    <select id="stretch-option">
+      <option value="yawnStretch">기지개 펴기</option>
+      <option value="NeckStretch">목 스트레칭</option>
+      <option value="backStretch">등 스트레칭</option>
+    </select>
+    <button onclick="setAlarm()">알람 설정하기</button>  
+  </div>
+    <div id="alarm-message"></div>
+</div>
+
+  <script>
+    let video = document.getElementById('video');
+    let canvas = document.getElementById('canvas');
+    let ctx = canvas.getContext('2d');
+    let audio = document.getElementById('audio'); 
+    let alarmTime = null;
+    let stretchCounter = 0;
+    let alarmTriggered = false;
+    let startButton = document.getElementById('startButton');
+    let interactionOverlay = document.getElementById('interactionOverlay');
+    let lyingDownDetected = false;
+    let stretchStartTime = null;
+    let finalStretchDuration = 10000; // 10 seconds
+    let isStretching = false;
+    const totalStretchesRequired = 3;
+    let selectedStretch = 'yawnStretch';
+    let alarmMessage = document.getElementById('alarm-message');
+
+    let poses = [];
+
+    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+      navigator.mediaDevices.getUserMedia({ video: true }).then(function(stream) {
+        video.srcObject = stream;
+        video.play();
+      });
+    }
+
+    function drawCameraIntoCanvas() {
+      ctx.drawImage(video, 0, 0, 640, 480);
+      drawKeypoints();
+      drawSkeleton();
+      checkIfLyingDown();
+      performSelectedStretch();
+      drawStretchCounter();
+      window.requestAnimationFrame(drawCameraIntoCanvas);
+    }
+
+    startButton.addEventListener('click', () => {
+      drawCameraIntoCanvas();
+      interactionOverlay.style.display = 'none';
+      audio.play();
+      audio.pause();
+      audio.currentTime = 0;
+    });
+
+    const poseNet = ml5.poseNet(video, modelReady);
+    poseNet.on('pose', gotPoses);
+
+    function gotPoses(results) {
+      poses = results;
+    }
+
+    function modelReady() {
+      console.log("model ready");
+      poseNet.multiPose(video);
+    }
+
+    function drawKeypoints() {
+      for (let i = 0; i < poses.length; i++) {
+        for (let j = 0; j < poses[i].pose.keypoints.length; j++) {
+          let keypoint = poses[i].pose.keypoints[j];
+          if (keypoint.score > 0.2) {
+            ctx.beginPath();
+            ctx.arc(keypoint.position.x, keypoint.position.y, 10, 0, 2 * Math.PI);
+            ctx.stroke();
+          }
+        }
+      }
+    }
+
+    function drawSkeleton() {
+      for (let i = 0; i < poses.length; i++) {
+        for (let j = 0; j < poses[i].skeleton.length; j++) {
+          let partA = poses[i].skeleton[j][0];
+          let partB = poses[i].skeleton[j][1];
+          ctx.beginPath();
+          ctx.moveTo(partA.position.x, partA.position.y);
+          ctx.lineTo(partB.position.x, partB.position.y);
+          ctx.stroke();
+        }
+      }
+    }
+
+    function checkIfLyingDown() {
+      for (let i = 0; i < poses.length; i++) {
+        let pose = poses[i].pose;
+
+        let nose = pose.keypoints.find(point => point.part === 'nose');
+        let leftShoulder = pose.keypoints.find(point => point.part === 'leftShoulder');
+        let rightShoulder = pose.keypoints.find(point => point.part === 'rightShoulder');
+        let leftHip = pose.keypoints.find(point => point.part === 'leftHip');
+        let rightHip = pose.keypoints.find(point => point.part === 'rightHip');
+
+        if (nose && leftShoulder && rightShoulder && leftHip && rightHip) {
+          let shoulderY = (leftShoulder.position.y + rightShoulder.position.y) / 2;
+          let hipY = (leftHip.position.y + rightHip.position.y) / 2;
+          let lyingDownThreshold = 100;
+
+          if (Math.abs(shoulderY - hipY) < lyingDownThreshold) {
+            console.log("Lying Down");
+            ctx.font = "30px Arial";
+            ctx.fillStyle = "red";
+            ctx.fillText("누워있음", 50, 50);
+            lyingDownDetected = true;
+
+            if (alarmTriggered && stretchCounter < totalStretchesRequired) {
+              audio.play();
+            }
+          } else {
+            lyingDownDetected = false;
+            if (!isStretching) {
+              audio.pause();
+            }
+          }
+        }
+      }
+    }
+
+    function performSelectedStretch() {
+      if (selectedStretch === 'yawnStretch') {
+        checkIfYawnStretch();
+      } else if (selectedStretch === 'NeckStretch') {
+        checkIfNeckStretch();
+      } else if (selectedStretch === 'backStretch') {
+        checkIfBackStretch();
+      }
+    }
+
+    function checkIfYawnStretch() {
+      for (let i = 0; i < poses.length; i++) {
+        let pose = poses[i].pose;
+
+        let leftShoulder = pose.keypoints.find(point => point.part === 'leftShoulder');
+        let rightShoulder = pose.keypoints.find(point => point.part === 'rightShoulder');
+        let leftElbow = pose.keypoints.find(point => point.part === 'leftElbow');
+        let rightElbow = pose.keypoints.find(point => point.part === 'rightElbow');
+        let leftWrist = pose.keypoints.find(point => point.part === 'leftWrist');
+        let rightWrist = pose.keypoints.find(point => point.part === 'rightWrist');
+
+        if (leftShoulder && rightShoulder && leftElbow && rightElbow && leftWrist && rightWrist) {
+          let areElbowsAboveShoulders = leftElbow.position.y < leftShoulder.position.y &&
+                                        rightElbow.position.y < rightShoulder.position.y;
+          let areWristsAboveShoulders = leftWrist.position.y < leftShoulder.position.y &&
+                                        rightWrist.position.y < rightShoulder.position.y;
+
+          if (areElbowsAboveShoulders && areWristsAboveShoulders) {
+            if (!stretchStartTime) {
+              stretchStartTime = Date.now();
+              console.log("Yawn stretch started");
+              if (alarmTriggered && !audio.paused) {
+                audio.pause();
+                isStretching = true;
+              }
+            } else {
+              let stretchDuration = Date.now() - stretchStartTime;
+
+              if (stretchDuration >= 3500) {
+                stretchCounter++;
+                console.log("Yawn Stretch detected: " + stretchCounter);
+                stretchStartTime = null;
+
+                if (stretchCounter >= totalStretchesRequired) {
+                  console.log("Final stretch detected");
+                  audio.pause();
+                  alarmTriggered = false;
+                  lyingDownDetected = false;
+                  stretchStartTime = null;
+                  stopCameraAndDisplayMessage();
+                  isStretching = false;
+                } else {
+                  isStretching = false;
+                }
+              }
+            }
+          } else {
+            stretchStartTime = null;
+            if (isStretching) {
+              audio.pause();
+              isStretching = false;
+            }
+          }
+        }
+      }
+    }
+
+    function checkIfNeckStretch() {
+      for (let i = 0; i < poses.length; i++) {
+        let pose = poses[i].pose;
+
+        let nose = pose.keypoints.find(point => point.part === 'nose');
+        let leftShoulder = pose.keypoints.find(point => point.part === 'leftShoulder');
+        let rightShoulder = pose.keypoints.find(point => point.part === 'rightShoulder');
+        let leftWrist = pose.keypoints.find(point => point.part === 'leftWrist');
+        let rightWrist = pose.keypoints.find(point => point.part === 'rightWrist');
+        let leftEar = pose.keypoints.find(point => point.part === 'leftEar');
+        let rightEar = pose.keypoints.find(point => point.part === 'rightEar');
+
+        if (nose && leftShoulder && rightShoulder && leftWrist && rightWrist && leftEar && rightEar) {
+          let neckTiltLeft = nose.position.y < leftShoulder.position.y && rightWrist.position.x < rightEar.position.x && rightWrist.position.y < rightEar.position.y;
+          let neckTiltRight = nose.position.y < rightShoulder.position.y && leftWrist.position.x < leftEar.position.x && leftWrist.position.y < leftEar.position.y;
+
+          if (neckTiltLeft || neckTiltRight) {
+            if (!stretchStartTime) {
+              stretchStartTime = Date.now();
+              console.log("Neck stretch started");
+              if (alarmTriggered && !audio.paused) {
+                audio.pause();
+                isStretching = true;
+              }
+            } else {
+              let stretchDuration = Date.now() - stretchStartTime;
+
+              if (stretchDuration >= 3500) {
+                stretchCounter++;
+                console.log("Neck Stretch detected: " + stretchCounter);
+                stretchStartTime = null;
+
+                if (stretchCounter >= totalStretchesRequired) {
+                  console.log("Final stretch detected");
+                  audio.pause();
+                  alarmTriggered = false;
+                  lyingDownDetected = false;
+                  stretchStartTime = null;
+                  stopCameraAndDisplayMessage();
+                  isStretching = false;
+                } else {
+                  isStretching = false;
+                }
+              }
+            }
+          } else {
+            stretchStartTime = null;
+            if (isStretching) {
+              audio.pause();
+              isStretching = false;
+            }
+          }
+        }
+      }
+    }
+
+    function checkIfBackStretch() {
+  for (let i = 0; i < poses.length; i++) {
+    let pose = poses[i].pose;
+
+    let nose = pose.keypoints.find(point => point.part === 'nose');
+    let leftWrist = pose.keypoints.find(point => point.part === 'leftWrist');
+    let rightWrist = pose.keypoints.find(point => point.part === 'rightWrist');
+
+    if (nose && leftWrist && rightWrist) {
+      let wristsTogether = Math.abs(leftWrist.position.x - rightWrist.position.x) < 50 &&
+                           Math.abs(leftWrist.position.y - rightWrist.position.y) < 50;
+      let handsAboveNose = leftWrist.position.y < nose.position.y && rightWrist.position.y < nose.position.y;
+
+      if (wristsTogether && handsAboveNose) {
+        if (!stretchStartTime) {
+          stretchStartTime = Date.now();
+          console.log("Back stretch started");
+          if (alarmTriggered && !audio.paused) {
+            audio.pause();
+            isStretching = true;
+          }
+        } else {
+          let stretchDuration = Date.now() - stretchStartTime;
+
+          if (stretchDuration >= 3500) {
+            stretchCounter++;
+            console.log("Back Stretch detected: " + stretchCounter);
+            stretchStartTime = null;
+
+            if (stretchCounter >= totalStretchesRequired) {
+              console.log("Final stretch detected");
+              audio.pause();
+              alarmTriggered = false;
+              lyingDownDetected = false;
+              stretchStartTime = null;
+              stopCameraAndDisplayMessage();
+              isStretching = false;
+            } else {
+              isStretching = false;
+            }
+          }
+        }
+      } else {
+        stretchStartTime = null;
+        if (isStretching) {
+          audio.pause();
+          isStretching = false;
+        }
+      }
+    }
+  }
+}
+
+
+    function setAlarm() {
+      let alarmInput = document.getElementById('alarm-time').value;
+      selectedStretch = document.getElementById('stretch-option').value;
+      if (alarmInput) {
+        alarmTime = alarmInput;
+        console.log("Alarm set for: " + alarmTime);
+        console.log("Selected stretch: " + selectedStretch);
+        alarmMessage.textContent = `${alarmTime}에 알람이 울립니다.`;
+        checkAlarmTime();
+      }
+    }
+
+    function checkAlarmTime() {
+      setInterval(() => {
+        let currentTime = new Date();
+        let hours = String(currentTime.getHours()).padStart(2, '0');
+        let minutes = String(currentTime.getMinutes()).padStart(2, '0');
+        let formattedTime = `${hours}:${minutes}`;
+
+        if (alarmTime === formattedTime) {
+          alarmTriggered = true;
+          if (lyingDownDetected) {
+            audio.play();
+            drawCameraIntoCanvas();
+          } else if (stretchCounter < totalStretchesRequired) {
+            audio.play();
+          }
+        } else if (alarmTriggered && lyingDownDetected) {
+          audio.play();
+        }
+      }, 1000);
+    }
+
+    function stopCameraAndDisplayMessage() {
+      let stream = video.srcObject;
+      let tracks = stream.getTracks();
+
+      tracks.forEach(function(track) {
+        track.stop();
+      });
+
+      video.srcObject = null;
+
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.font = "50px Arial";
+      ctx.fillStyle = "green";
+      ctx.fillText("좋은 하루 되세요!", 120, 240);
+    }
+
+    function drawStretchCounter() {
+      const remainingStretches = Math.max(totalStretchesRequired - stretchCounter, 0);
+      ctx.font = "30px Arial";
+      ctx.fillStyle = "blue";
+      ctx.fillText(`남은 스트레칭 개수: ${remainingStretches}`, 10, 50);
+    }
+  </script>
+</body>
+</html>
